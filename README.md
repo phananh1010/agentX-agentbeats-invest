@@ -5,7 +5,7 @@
 ## Quickstart
 1. Clone the repo
 ```
-git clone git@github.com:agentbeats/tutorial.git agentbeats-tutorial
+git clone git@github.com:rdi-foundation/agentbeats-tutorial.git
 cd agentbeats-tutorial
 ```
 2. Install dependencies
