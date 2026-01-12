@@ -2,6 +2,7 @@ import sys
 import json
 import asyncio
 from pathlib import Path
+from urllib.parse import urlparse
 
 import tomllib
 
@@ -17,12 +18,22 @@ from a2a.types import (
     DataPart,
 )
 
+def _validate_endpoint(endpoint: str) -> None:
+    parsed = urlparse(endpoint)
+    host = parsed.hostname
+    port = parsed.port
+    if not host or port is None:
+        raise ValueError(f"Invalid endpoint: {endpoint!r}")
+    if host in {"0.0.0.0", "::"}:
+        raise ValueError("Endpoint host must be a connectable address (use 127.0.0.1 or ::1).")
+
 
 def parse_toml(d: dict[str, object]) -> tuple[EvalRequest, str, dict[str, str]]:
     green = d.get("green_agent")
     if not isinstance(green, dict) or "endpoint" not in green:
         raise ValueError("green.endpoint is required in TOML")
     green_endpoint: str = green["endpoint"]
+    _validate_endpoint(green_endpoint)
 
     parts: dict[str, str] = {}
     role_to_id: dict[str, str] = {}
@@ -33,6 +44,7 @@ def parse_toml(d: dict[str, object]) -> tuple[EvalRequest, str, dict[str, str]]:
             endpoint = p.get("endpoint")
             agentbeats_id = p.get("agentbeats_id")
             if role and endpoint:
+                _validate_endpoint(endpoint)
                 parts[role] = endpoint
             if role and agentbeats_id:
                 role_to_id[role] = agentbeats_id
@@ -87,12 +99,18 @@ async def main():
     toml_data = scenario_path.read_text()
     data = tomllib.loads(toml_data)
 
-    req, green_url, role_to_id = parse_toml(data)
+    try:
+        req, green_url, role_to_id = parse_toml(data)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
 
     artifacts: list[Artifact] = []
+    error_status: str | None = None
 
     async def event_consumer(event, card: AgentCard):
         nonlocal artifacts
+        nonlocal error_status
         match event:
             case Message() as msg:
                 print_parts(msg.parts)
@@ -105,8 +123,7 @@ async def main():
                     print(task.artifacts)
                     artifacts = task.artifacts
                 elif status.state.value not in ["submitted", "working"]:
-                    print(f"Agent returned status {status.state.value}. Exiting.")
-                    exit(1)
+                    error_status = status.state.value
 
             case (task, TaskArtifactUpdateEvent() as artifact_event):
                 print_parts(artifact_event.artifact.parts, "Artifact update")
@@ -119,30 +136,34 @@ async def main():
                     print(task.artifacts)
                     artifacts = task.artifacts
                 elif status.state.value not in ["submitted", "working"]:
-                    print(f"Agent returned status {status.state.value}. Exiting.")
-                    exit(1)
+                    error_status = status.state.value
 
             case _:
                 print("Unhandled event")
 
     msg = req.model_dump_json()
-    await send_message(msg, green_url, streaming=True, consumer=event_consumer)
+    try:
+        await send_message(msg, green_url, streaming=True, consumer=event_consumer)
+    finally:
+        if output_path:
+            all_data_parts = []
+            for artifact in artifacts:
+                _, data_parts = parse_parts(artifact.parts)
+                all_data_parts.extend(data_parts)
 
-    if output_path:
-        all_data_parts = []
-        for artifact in artifacts:
-            _, data_parts = parse_parts(artifact.parts)
-            all_data_parts.extend(data_parts)
+            output_data = {
+                "participants": role_to_id,
+                "results": all_data_parts
+            }
 
-        output_data = {
-            "participants": role_to_id,
-            "results": all_data_parts
-        }
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(output_data, f, indent=2)
+                print(f"Results written to {output_path}")
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            json.dump(output_data, f, indent=2)
-            print(f"Results written to {output_path}")
+    if error_status:
+        print(f"Agent returned status {error_status}.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

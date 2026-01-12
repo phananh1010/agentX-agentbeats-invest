@@ -1,7 +1,9 @@
 import argparse
 import asyncio
+import socket
 import os, sys, time, subprocess, shlex, signal
 from pathlib import Path
+from urllib.parse import urlparse
 import tomllib
 import httpx
 from dotenv import load_dotenv
@@ -10,6 +12,32 @@ from a2a.client import A2ACardResolver
 
 
 load_dotenv(override=True)
+
+
+def _endpoint_is_listening(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_endpoints_unused(cfg: dict) -> None:
+    conflicts: list[str] = []
+
+    for p in cfg["participants"]:
+        if p.get("cmd") and _endpoint_is_listening(p["host"], p["port"]):
+            conflicts.append(f"{p['role']} ({p['host']}:{p['port']})")
+
+    if cfg["green_agent"].get("cmd") and _endpoint_is_listening(cfg["green_agent"]["host"], cfg["green_agent"]["port"]):
+        conflicts.append(f"green_agent ({cfg['green_agent']['host']}:{cfg['green_agent']['port']})")
+
+    if conflicts:
+        print("Error: Some agent endpoints are already in use:")
+        for conflict in conflicts:
+            print(f"  - {conflict}")
+        print("Pick different ports in the scenario TOML (both endpoint and cmd) or stop the process using them.")
+        sys.exit(1)
 
 
 async def wait_for_agents(cfg: dict, timeout: int = 30) -> bool:
@@ -65,21 +93,29 @@ def parse_toml(scenario_path: str) -> dict:
 
     data = tomllib.loads(path.read_text())
 
-    def host_port(ep: str):
-        s = (ep or "")
-        s = s.replace("http://", "").replace("https://", "")
-        s = s.split("/", 1)[0]
-        host, port = s.split(":", 1)
-        return host, int(port)
+    def parse_endpoint(ep: str) -> tuple[str, int]:
+        parsed = urlparse(ep or "")
+        host = parsed.hostname
+        port = parsed.port
+        if not host or port is None:
+            print(f"Error: Invalid endpoint in scenario TOML: {ep!r}")
+            sys.exit(1)
+        if host in {"0.0.0.0", "::"}:
+            print("Error: Endpoint host must be a connectable address (use 127.0.0.1 or ::1).")
+            sys.exit(1)
+        return host, port
 
-    green_ep = data.get("green_agent", {}).get("endpoint", "")
-    g_host, g_port = host_port(green_ep)
+    green_ep = data.get("green_agent", {}).get("endpoint")
+    if not green_ep:
+        print("Error: green_agent.endpoint is required in scenario TOML.")
+        sys.exit(1)
+    g_host, g_port = parse_endpoint(green_ep)
     green_cmd = data.get("green_agent", {}).get("cmd", "")
 
     parts = []
     for p in data.get("participants", []):
         if isinstance(p, dict) and "endpoint" in p:
-            h, pt = host_port(p["endpoint"])
+            h, pt = parse_endpoint(p["endpoint"])
             parts.append({
                 "role": str(p.get("role", "")),
                 "host": h,
@@ -113,6 +149,8 @@ def main():
 
     procs = []
     try:
+        ensure_endpoints_unused(cfg)
+
         # start participant agents
         for p in cfg["participants"]:
             cmd_args = shlex.split(p.get("cmd", ""))
@@ -141,7 +179,7 @@ def main():
         # Wait for all agents to be ready
         if not asyncio.run(wait_for_agents(cfg)):
             print("Error: Not all agents became ready. Exiting.")
-            return
+            sys.exit(1)
 
         print("Agents started. Press Ctrl+C to stop.")
         if args.serve_only:
@@ -159,6 +197,8 @@ def main():
             )
             procs.append(client_proc)
             client_proc.wait()
+            if client_proc.returncode:
+                sys.exit(client_proc.returncode)
 
     except KeyboardInterrupt:
         pass
