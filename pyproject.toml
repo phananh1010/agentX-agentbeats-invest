@@ -11,21 +11,10 @@ requires-python = ">=3.11"
 dependencies = [
     "a2a-sdk[http-server]>=0.3.20",
     "httpx>=0.28.1",
+    "perplexityai>=0.27.0",
     "pydantic>=2.11.9",
     "python-dotenv>=1.1.1",
     "uvicorn>=0.38.0",
-]
-
-[project.optional-dependencies]
-debate = [
-    "google-genai>=1.36.0",
-]
-tau2-agent = [
-    "litellm>=1.0.0",
-]
-tau2-evaluator = [
-    "nest-asyncio>=1.6.0",
-    "tau2 @ git+https://github.com/sierra-research/tau2-bench.git",
 ]
 
 [project.scripts]
@@ -35,6 +24,8 @@ agentbeats-run = "agentbeats.run_scenario:main"
 package = true
 dev-dependencies = [
     "mypy>=1.18.1",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=0.23.8",
 ]
 
 [tool.hatch.metadata]
