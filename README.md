@@ -18,4 +18,10 @@ The `scenarios/invest` benchmark pairs a purple research agent with a green eval
 - Run the full pipeline with logs:  
   `uv run agentbeats-run scenarios/invest/scenario.toml --show-logs`
   - Starts both agents from the TOML, waits for them to be ready, sends the assessment, streams logs, and prints the result artifact.
-- To change tickers or dates, edit the `[config]` section of `scenarios/invest/scenario.toml` (e.g., `tickers = ["RR", "AAPL"]`) and rerun the same command.
+  - To change tickers or dates, edit the `[config]` section of `scenarios/invest/scenario.toml` (e.g., `tickers = ["RR", "AAPL"]`) and rerun the same command.
+
+## Run Green Evaluator in Docker
+- Build: `docker build -f scenarios/invest/evaluator/Dockerfile -t invest-green .`
+- Run: `docker run --rm -p 9109:9109 -e PERPLEXITY_API_KEY=your_key invest-green`
+- In `scenarios/invest/scenario.toml`, keep `green_agent.endpoint = "http://127.0.0.1:9109"` and set `green_agent.cmd = ""` so the runner uses the container.
+- Then run the scenario as usual: `uv run agentbeats-run scenarios/invest/scenario.toml --show-logs`
